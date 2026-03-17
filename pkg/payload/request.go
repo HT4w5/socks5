@@ -1,9 +1,8 @@
 package payload
 
 import (
-	"encoding/binary"
+	"bufio"
 	"fmt"
-	"io"
 	"net/netip"
 )
 
@@ -12,6 +11,11 @@ const (
 	IPv4Addr   uint8 = 1
 	DomainName uint8 = 3
 	IPv6Addr   uint8 = 4
+)
+
+// RSV
+const (
+	requestRSV uint8 = 0
 )
 
 /*
@@ -23,62 +27,57 @@ const (
 */
 // A socks request
 type Request struct {
-	Ver       uint8
-	Cmd       uint8
-	ATyp      uint8
-	DstAddr   netip.Addr
-	DstDomain [255]byte // Avoid heap allocation
-	DstPort   uint16
+	Ver          uint8
+	Cmd          uint8
+	ATyp         uint8
+	DstAddr      netip.Addr
+	DstDomainLen uint8
+	DstDomain    [255]byte // Avoid heap allocation
+	DstPort      uint16
 }
 
-func (req *Request) Read(r io.Reader) error {
+func (req *Request) Read(br *bufio.Reader) error {
 	// Read Ver, Cmd and ATyp
-	header := make([]uint8, 4)
-	if _, err := io.ReadFull(r, header); err != nil {
-		return fmt.Errorf("failed to cread header: %w", err)
+	var err error
+	if req.Ver, err = br.ReadByte(); err != nil {
+		return fmt.Errorf("failed to read ver: %w", err)
 	}
-
-	req.Ver = header[0]
-	req.Cmd = header[1]
-	// Skip Rsv
-	req.ATyp = header[3]
+	if req.Cmd, err = br.ReadByte(); err != nil {
+		return fmt.Errorf("failed to read cmd: %w", err)
+	}
+	if _, err = br.Discard(1); err != nil {
+		return fmt.Errorf("failed to discard rsv: %w", err)
+	}
+	if req.ATyp, err = br.ReadByte(); err != nil {
+		return fmt.Errorf("failed to read atyp: %w", err)
+	}
 
 	// Read DstAddr (or DstDomain)
 	switch req.ATyp {
 	case IPv4Addr:
-		var addr [4]byte
-		if _, err := io.ReadFull(r, addr[:]); err != nil {
-			return fmt.Errorf("failed to read ipv4 dst address: %v", err)
+		if req.DstAddr, err = readIPv4Addr(br); err != nil {
+			return err
 		}
-		req.DstAddr = netip.AddrFrom4(addr)
 	case IPv6Addr:
-		var addr [16]byte
-		if _, err := io.ReadFull(r, addr[:]); err != nil {
-			return fmt.Errorf("failed to read ipv6 dst address: %v", err)
+		if req.DstAddr, err = readIPv6Addr(br); err != nil {
+			return err
 		}
-		req.DstAddr = netip.AddrFrom16(addr)
 	case DomainName:
-		var nameLen [1]uint8
-		if _, err := io.ReadFull(r, nameLen[:]); err != nil {
-			return fmt.Errorf("failed to read dst domain name length: %v", err)
+		if req.DstDomainLen, req.DstDomain, err = readDomainName(br); err != nil {
+			return err
 		}
-
-		if _, err := io.ReadFull(r, req.DstDomain[:nameLen[0]]); err != nil {
-			return fmt.Errorf("failed to read dst domain name: %v", err)
-		}
+	default:
+		return fmt.Errorf("unsupported dst address type: %v", req.ATyp)
 	}
 
-	// Read DstPort
-	var port [2]byte
-	if _, err := io.ReadFull(r, port[:]); err != nil {
+	if req.DstPort, err = readPort(br); err != nil {
 		return err
 	}
-	req.DstPort = binary.BigEndian.Uint16(port[:])
 
 	return nil
 }
 
-func (req *Request) Write(r io.Writer) error {
+func (req *Request) Write(bw *bufio.Writer) error {
 	// TODO
 	return nil
 }

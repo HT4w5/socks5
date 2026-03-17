@@ -1,6 +1,7 @@
 package payload
 
 import (
+	"bufio"
 	"fmt"
 	"io"
 )
@@ -31,24 +32,25 @@ type ClientMSM struct {
 	Methods  [255]uint8 // Avoid heap allocation
 }
 
-func (m *ClientMSM) Read(r io.Reader) error {
-	var header [2]uint8
-	if _, err := io.ReadFull(r, header[:]); err != nil {
-		return fmt.Errorf("failed to read header: %w", err)
+func (m *ClientMSM) Read(br *bufio.Reader) error {
+	var err error
+
+	if m.Ver, err = br.ReadByte(); err != nil {
+		return fmt.Errorf("failed to read ver: %w", err)
 	}
 
-	m.Ver = header[0]
-	m.NMethods = header[1]
+	if m.NMethods, err = br.ReadByte(); err != nil {
+		return fmt.Errorf("failed to read nmethods: %w", err)
+	}
 
-	if _, err := io.ReadFull(r, m.Methods[:m.NMethods]); err != nil {
+	if _, err := io.ReadFull(br, m.Methods[:m.NMethods]); err != nil {
 		return fmt.Errorf("failed to read methods: %w", err)
 	}
 
 	return nil
 }
 
-func (m *ClientMSM) Write(w io.Writer) error {
-	// TODO
+func (m *ClientMSM) Write(bw *bufio.Writer) error {
 	return nil
 }
 
@@ -65,13 +67,19 @@ type ServerMSM struct {
 	Method uint8
 }
 
-func (m *ServerMSM) Read(r io.Reader) error {
+func (m *ServerMSM) Read(br *bufio.Reader) error {
 	// TODO
 	return nil
 }
 
-func (m *ServerMSM) Write(w io.Writer) error {
-	buf := [2]byte{m.Ver, m.Method} // Avoid heap allocation
-	_, err := w.Write(buf[:])
-	return err
+func (m *ServerMSM) Write(bw *bufio.Writer) error {
+	err := bw.WriteByte(m.Ver)
+	if err != nil {
+		return fmt.Errorf("failed to write ver: %w", err)
+	}
+	err = bw.WriteByte(m.Method)
+	if err != nil {
+		return fmt.Errorf("failed to write method: %w", err)
+	}
+	return nil
 }
