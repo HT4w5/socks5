@@ -36,25 +36,25 @@ type StdoutLogger struct {
 
 func (s *StdoutLogger) Errorf(format string, a ...any) {
 	if s.level >= Error {
-		fmt.Fprintf(os.Stdout, "[ERROR] "+format, a...)
+		fmt.Fprintf(os.Stdout, "[ERROR] "+format+"\n", a...)
 	}
 }
 
 func (s *StdoutLogger) Warnf(format string, a ...any) {
 	if s.level >= Warn {
-		fmt.Fprintf(os.Stdout, "[WARN] "+format, a...)
+		fmt.Fprintf(os.Stdout, "[WARN] "+format+"\n", a...)
 	}
 }
 
 func (s *StdoutLogger) Infof(format string, a ...any) {
 	if s.level >= Info {
-		fmt.Fprintf(os.Stdout, "[INFO] "+format, a...)
+		fmt.Fprintf(os.Stdout, "[INFO] "+format+"\n", a...)
 	}
 }
 
 func (s *StdoutLogger) Debugf(format string, a ...any) {
 	if s.level >= Debug {
-		fmt.Fprintf(os.Stdout, "[DEBUG] "+format, a...)
+		fmt.Fprintf(os.Stdout, "[DEBUG] "+format+"\n", a...)
 	}
 }
 
