@@ -1,10 +1,10 @@
 package payload
 
 import (
-	"bufio"
+	"io"
 )
 
 type Payload interface {
-	Read(br *bufio.Reader) error
-	Write(bw *bufio.Writer) error
+	Read(r io.Reader) error
+	Write(w io.Writer) error
 }
