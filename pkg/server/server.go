@@ -103,7 +103,6 @@ func (s *Server) ListenAndServe(ctx context.Context, addr netip.AddrPort) error 
 			}
 		}
 		wg.Go(func() {
-			defer wg.Done()
 			s.handleConn(connCtx, conn)
 		})
 	}
@@ -198,15 +197,4 @@ func (s *Server) handleConn(ctx context.Context, conn net.Conn) {
 	// Handle failure reply
 Failure:
 	s.sendFailureReply(conn, rep)
-}
-
-// Send socks reply with rep (failure only)
-func (s *Server) sendFailureReply(conn net.Conn, rep uint8) {
-	s.logger.Warnf("sending reply: %s", payload.ReplyReason(rep))
-	r := payload.NewReply(
-		payload.ReplyWithRep(rep),
-	)
-	if err := r.Write(conn); err != nil {
-		s.logger.Errorf("failed to write reply: %v", err)
-	}
 }
