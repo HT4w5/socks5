@@ -79,7 +79,10 @@ func (req *Request) Read(r io.Reader) error {
 			return fmt.Errorf("failed to read fqdn: %w", err)
 		}
 	default:
-		return fmt.Errorf("unsupported dst address type: %v", req.ATyp)
+		// Address type not supported
+		// The caller is responsible for checking the address type
+		// and sending a `X'08' Address type not supported` reply
+		return nil
 	}
 
 	var port [2]byte
