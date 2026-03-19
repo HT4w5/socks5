@@ -1,25 +1,37 @@
-package socks5
+package server
 
 import (
-	"bufio"
 	"context"
-	"fmt"
 	"net"
+	"net/netip"
 	"sync"
+	"time"
 
+	"github.com/HT4w5/socks5/pkg/dialer"
 	"github.com/HT4w5/socks5/pkg/log"
+	"github.com/HT4w5/socks5/pkg/method"
 	"github.com/HT4w5/socks5/pkg/payload"
+	"github.com/HT4w5/socks5/pkg/resolver"
+)
+
+const (
+	shutdownTimeout = 30 * time.Second
 )
 
 type Server struct {
-	logger log.Logger
+	endpoint netip.AddrPort
+	res      resolver.Resolver
+	dialer   func(ctx context.Context, network string, address string) (net.Conn, error)
+	neg      *method.Negotiator
+	logger   log.Logger
 }
 
 // Creates a socks5 server
 func New(opts ...func(*Server)) *Server {
 	srv := &Server{
-		// Use discard logger in default
-		logger: &log.DiscardLogger{},
+		logger: &log.DiscardLogger{}, // Use discard logger by default
+		dialer: dialer.DefaultDialer,
+		res:    &resolver.SystemResolver{},
 	}
 
 	for _, opt := range opts {
@@ -29,24 +41,46 @@ func New(opts ...func(*Server)) *Server {
 	return srv
 }
 
+func WithLogger(l log.Logger) func(*Server) {
+	return func(s *Server) {
+		s.logger = l
+	}
+}
+
+func WithNegotiator(neg *method.Negotiator) func(*Server) {
+	return func(s *Server) {
+		s.neg = neg
+	}
+}
+
+func WithDialer(d dialer.Dialer) func(*Server) {
+	return func(s *Server) {
+		s.dialer = d
+	}
+}
+
 // Listen on network and addr
-func (s *Server) ListenAndServe(ctx context.Context, network, addr string) error {
+func (s *Server) ListenAndServe(ctx context.Context, addr netip.AddrPort) error {
+	s.endpoint = addr
 	cfg := net.ListenConfig{}
 
-	lis, err := cfg.Listen(ctx, network, addr)
+	lis, err := cfg.Listen(ctx, "tcp", addr.String())
 	if err != nil {
 		return err
 	}
 
 	var wg sync.WaitGroup
 
+	connCtx, cancelConn := context.WithCancel(context.Background())
+	defer cancelConn()
+
 	// Closer
 	go func() {
 		<-ctx.Done()
-		err := lis.Close()
-		if err != nil {
+		if err := lis.Close(); err != nil {
 			s.logger.Errorf("failed to close listener: %v", err)
 		}
+		time.AfterFunc(shutdownTimeout, cancelConn)
 	}()
 
 	for {
@@ -58,14 +92,18 @@ func (s *Server) ListenAndServe(ctx context.Context, network, addr string) error
 				return ctx.Err()
 			default:
 				s.logger.Errorf("failed to accept connection: %v", err)
+				continue
 			}
 		}
-		go s.handleConn(conn)
+		wg.Go(func() {
+			defer wg.Done()
+			s.handleConn(connCtx, conn)
+		})
 	}
 }
 
 // Handles a connection
-func (s *Server) handleConn(conn net.Conn) error {
+func (s *Server) handleConn(ctx context.Context, conn net.Conn) {
 	defer func() {
 		err := conn.Close()
 		if err != nil {
@@ -73,21 +111,95 @@ func (s *Server) handleConn(conn net.Conn) error {
 		}
 	}()
 
-	br := bufio.NewReader(conn)
-	bw := bufio.NewWriter(conn)
-
-	// Check socks version for safety
-	ver, err := br.ReadByte()
+	handler, err := s.neg.HandleNegotiation(conn)
 	if err != nil {
-		s.logger.Errorf("failed to get version byte: %v", err)
-		return err
+		s.logger.Warnf("method negotiation failed: %v", err)
+		return
 	}
 
-	if ver != payload.SocksVersion {
-		err := fmt.Errorf("unsupported socks version: %v", ver)
-		s.logger.Errorf("%v", err)
-		return err
+	// Wrap connection in method handler
+	conn = handler.Wrap(conn)
+
+	// From now on, a reply is guaranteed
+	// `goto Failure` triggers non-success reply
+	rep := payload.ServerFailure
+
+	// Process request
+	var request payload.Request
+	if err := request.Read(conn); err != nil {
+		s.logger.Errorf("failed to read request: %v", err)
+		goto Failure
 	}
 
-	//
+	// Check version
+	if request.Ver != payload.SocksVersion {
+		s.logger.Warnf("unsupported socks version: %v", request.Ver)
+		goto Failure
+	}
+
+	// Check command (for support, not allowance)
+	switch request.Cmd {
+	case payload.Connect:
+	case payload.Bind: // TODO: implement Bind
+		fallthrough
+	case payload.UDPAssociate: // TODO: implement UDPAssociate
+		fallthrough
+	default:
+		rep = payload.CommandNotSupported
+		goto Failure
+	}
+
+	// Check address type (for support, not allowance)
+	switch request.ATyp {
+	case payload.IPv4Addr:
+		fallthrough
+	case payload.IPv6Addr:
+		fallthrough
+	case payload.FQDNAddr:
+	default:
+		rep = payload.AddressTypeNotSupported
+		goto Failure
+	}
+
+	// TODO: implement ruleset
+
+	// Resolve FQDN
+	if request.ATyp == payload.FQDNAddr {
+		if addr, err := s.res.Resolve(ctx, string(request.DstFQDN[:])); err != nil {
+			s.logger.Warnf("failed to resolve dst fqdn: %v; aborting", err)
+			rep = payload.HostUnreachable
+			goto Failure
+		} else {
+			request.DstAddr = addr
+		}
+	}
+
+	// Select command
+	// Upsteam connection test is handled by specific command handler
+	switch request.Cmd {
+	case payload.Connect:
+	case payload.Bind: // TODO: implement Bind
+		fallthrough
+	case payload.UDPAssociate: // TODO: implement UDPAssociate
+		fallthrough
+	default:
+		// Should never reach this point if nothing is wrong
+		rep = payload.CommandNotSupported
+		goto Failure
+	}
+
+	// Handle failure reply
+Failure:
+	s.sendFailureReply(conn, rep)
+}
+
+// Send socks reply with rep (failure only)
+func (s *Server) sendFailureReply(conn net.Conn, rep uint8) {
+	s.logger.Warnf("sending reply: %s", payload.ReplyReason(rep))
+	r := payload.NewReply(
+		payload.ReplyWithRep(rep),
+	)
+	if err := r.Write(conn); err != nil {
+		s.logger.Errorf("failed to write reply: %v", err)
+	}
 }
