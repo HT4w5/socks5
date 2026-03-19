@@ -32,3 +32,23 @@ func TestCachedResolver_SimpleResolve(t *testing.T) {
 		t.Errorf("bad resolve result, expected loopback, got %s", got)
 	}
 }
+
+func TestCachedResolver_NXDOMAIN(t *testing.T) {
+	r := resolver.NewCachedResolver(
+		resolver.WithResolver(
+			&net.Resolver{
+				PreferGo: true,
+				Dial: func(ctx context.Context, network, address string) (net.Conn, error) {
+					return net.Dial("udp", "8.8.8.8:53")
+				},
+			},
+		),
+		resolver.WithMaxLen(10),
+		resolver.WithTTL(5*time.Second),
+	)
+
+	_, err := r.Resolve(t.Context(), "nosuchdomain")
+	if err == nil {
+		t.Errorf("expected error")
+	}
+}

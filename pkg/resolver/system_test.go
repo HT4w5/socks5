@@ -18,3 +18,12 @@ func TestSystemResolver_SimpleResolve(t *testing.T) {
 		t.Errorf("bad resolve result, expected loopback, got %s", got)
 	}
 }
+
+func TestSystemResolver_NXDOMAIN(t *testing.T) {
+	var r *resolver.SystemResolver
+
+	_, err := r.Resolve(t.Context(), "nosuchdomain")
+	if err == nil {
+		t.Errorf("expected error")
+	}
+}
