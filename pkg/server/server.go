@@ -32,6 +32,7 @@ func New(opts ...func(*Server)) *Server {
 		logger: &log.DiscardLogger{}, // Use discard logger by default
 		dialer: dialer.DefaultDialer,
 		res:    &resolver.SystemResolver{},
+		neg:    method.New(),
 	}
 
 	for _, opt := range opts {
@@ -56,6 +57,12 @@ func WithNegotiator(neg *method.Negotiator) func(*Server) {
 func WithDialer(d dialer.Dialer) func(*Server) {
 	return func(s *Server) {
 		s.dialer = d
+	}
+}
+
+func WithResolver(r resolver.Resolver) func(*Server) {
+	return func(s *Server) {
+		s.res = r
 	}
 }
 
