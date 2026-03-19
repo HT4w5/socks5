@@ -25,7 +25,7 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	err := srv.ListenAndServe(ctx, netip.MustParseAddrPort("0.0.0.0:8080"))
+	err := srv.ListenAndServe(ctx, netip.MustParseAddrPort("0.0.0.0:1080"))
 	if err != nil {
 		logger.Errorf("failed to listen: %v", err)
 		os.Exit(1)
