@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/netip"
+	"strings"
 )
 
 // ATYP
@@ -42,6 +43,43 @@ type Request struct {
 	DstFQDNLen uint8
 	DstFQDN    [255]byte // Avoid heap allocation
 	DstPort    uint16
+}
+
+func (r *Request) String() string {
+	var b strings.Builder
+	b.WriteString("{")
+
+	// Ver
+	fmt.Fprintf(&b, "Ver: %d, ", r.Ver)
+
+	// Cmd
+	cmdStr := ""
+	switch r.Cmd {
+	case Connect:
+		cmdStr = "CONNECT"
+	case Bind:
+		cmdStr = "BIND"
+	case UDPAssociate:
+		cmdStr = "UDP_ASSOCIATE"
+	default:
+		cmdStr = fmt.Sprintf("UNKNOWN(0x%02x)", r.Cmd)
+	}
+	fmt.Fprintf(&b, "Cmd: %s, ", cmdStr)
+
+	// DstAddr
+	b.WriteString("Dst: ")
+	switch r.ATyp {
+	case IPv4Addr, IPv6Addr:
+		fmt.Fprintf(&b, "%s:%d", r.DstAddr.String(), r.DstPort)
+	case FQDNAddr:
+		domain := string(r.DstFQDN[:r.DstFQDNLen])
+		fmt.Fprintf(&b, "%s:%d", domain, r.DstPort)
+	default:
+		fmt.Fprintf(&b, "INVALID_ATYP(%d)", r.ATyp)
+	}
+
+	b.WriteString("}")
+	return b.String()
 }
 
 func (req *Request) Read(r io.Reader) error {

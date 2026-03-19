@@ -69,12 +69,14 @@ func WithResolver(r resolver.Resolver) func(*Server) {
 // Listen on network and addr
 func (s *Server) ListenAndServe(ctx context.Context, addr netip.AddrPort) error {
 	s.endpoint = addr
+	addtString := addr.String()
 	cfg := net.ListenConfig{}
 
-	lis, err := cfg.Listen(ctx, "tcp", addr.String())
+	lis, err := cfg.Listen(ctx, "tcp", addtString)
 	if err != nil {
 		return err
 	}
+	s.logger.Infof("listening on %s", addtString)
 
 	var wg sync.WaitGroup
 
@@ -95,13 +97,16 @@ func (s *Server) ListenAndServe(ctx context.Context, addr netip.AddrPort) error 
 		if err != nil {
 			select {
 			case <-ctx.Done():
+				s.logger.Infof("server shutdown")
+				s.logger.Infof("waiting for sessions to exit...")
 				wg.Wait()
-				return ctx.Err()
+				return nil
 			default:
 				s.logger.Errorf("failed to accept connection: %v", err)
 				continue
 			}
 		}
+		s.logger.Infof("accepted connection from %s", conn.RemoteAddr().String())
 		wg.Go(func() {
 			s.handleConn(connCtx, conn)
 		})
@@ -110,6 +115,7 @@ func (s *Server) ListenAndServe(ctx context.Context, addr netip.AddrPort) error 
 
 // Handles a connection
 func (s *Server) handleConn(ctx context.Context, conn net.Conn) {
+	s.logger.Debugf("handling connection")
 	defer func() {
 		err := conn.Close()
 		if err != nil {
@@ -136,6 +142,8 @@ func (s *Server) handleConn(ctx context.Context, conn net.Conn) {
 		s.logger.Errorf("failed to read request: %v", err)
 		goto Failure
 	}
+
+	s.logger.Debugf("received request: %s", request.String())
 
 	// Check version
 	if request.Ver != payload.SocksVersion {
@@ -184,6 +192,7 @@ func (s *Server) handleConn(ctx context.Context, conn net.Conn) {
 	// Upsteam connection test is handled by specific command handler
 	switch request.Cmd {
 	case payload.Connect:
+		s.handleConnect(ctx, conn, &request)
 	case payload.Bind: // TODO: implement Bind
 		fallthrough
 	case payload.UDPAssociate: // TODO: implement UDPAssociate
@@ -194,6 +203,7 @@ func (s *Server) handleConn(ctx context.Context, conn net.Conn) {
 		goto Failure
 	}
 
+	return
 	// Handle failure reply
 Failure:
 	s.sendFailureReply(conn, rep)

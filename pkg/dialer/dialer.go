@@ -12,5 +12,8 @@ type Dialer func(ctx context.Context, network string, address string) (net.Conn,
 var DefaultDialer = func(ctx context.Context, network string, address string) (net.Conn, error) {
 	var d net.Dialer
 	conn, err := d.DialContext(ctx, network, address)
-	return conn, errors.GetNetworkError(err)
+	if err != nil {
+		return nil, errors.GetNetworkError(err)
+	}
+	return conn, nil
 }

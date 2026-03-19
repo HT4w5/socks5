@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"net"
+	"net/netip"
 	"strconv"
 
 	"github.com/HT4w5/socks5/pkg/errors"
@@ -32,15 +33,27 @@ func (s *Server) handleConnect(ctx context.Context, conn net.Conn, request *payl
 	}
 	defer func() {
 		err := tgtConn.Close()
-		s.logger.Errorf("failed to close target connection: %v", err)
+		if err != nil {
+			s.logger.Errorf("failed to close target connection: %v", err)
+		}
 	}()
 
 	// Send success reply
+	remoteAddr := conn.RemoteAddr().String()
+	addrPort, err := netip.ParseAddrPort(remoteAddr)
+	if err != nil {
+		s.logger.Errorf("failed to parse remote address: %v", err)
+		s.sendFailureReply(conn, rep)
+		return
+	}
+
 	r := payload.NewReply(
 		payload.ReplyWithRep(payload.Succeeded),
-		payload.ReplyWithIP(s.endpoint.Addr()),
-		payload.ReplyWithPort(s.endpoint.Port()),
+		payload.ReplyWithIP(addrPort.Addr()),
+		payload.ReplyWithPort(addrPort.Port()),
 	)
+
+	s.logger.Debugf("sending reply: %s", r.String())
 
 	if err := r.Write(conn); err != nil {
 		s.logger.Errorf("failed to write reply: %v", err)

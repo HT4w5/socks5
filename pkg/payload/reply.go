@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/netip"
+	"strings"
 )
 
 // RSV
@@ -26,7 +27,7 @@ const (
 )
 
 // Get description of REP
-func ReplyReason(rep uint8) string {
+func ReplyDesc(rep uint8) string {
 	switch rep {
 	case Succeeded:
 		return "succeeded"
@@ -47,7 +48,7 @@ func ReplyReason(rep uint8) string {
 	case AddressTypeNotSupported:
 		return "address type not supported"
 	default:
-		return "unknown rep"
+		return fmt.Sprintf("unknown rep (0x%02x)", rep)
 	}
 }
 
@@ -67,6 +68,32 @@ type Reply struct {
 	BndFQDNLen uint8
 	BndFQDN    [255]byte // Avoid heap allocation
 	BndPort    uint16
+}
+
+func (r *Reply) String() string {
+	var b strings.Builder
+	b.WriteString("{")
+
+	// Ver
+	fmt.Fprintf(&b, "Ver: %d, ", r.Ver)
+
+	// Rep
+	fmt.Fprintf(&b, "Status: %s, ", ReplyDesc(r.Rep))
+
+	// BndAddr
+	b.WriteString("Bnd: ")
+	switch r.ATyp {
+	case IPv4Addr, IPv6Addr:
+		fmt.Fprintf(&b, "%s:%d", r.BndAddr.String(), r.BndPort)
+	case FQDNAddr:
+		domain := string(r.BndFQDN[:r.BndFQDNLen])
+		fmt.Fprintf(&b, "%s:%d", domain, r.BndPort)
+	default:
+		fmt.Fprintf(&b, "INVALID_ATYP(%d)", r.ATyp)
+	}
+
+	b.WriteString("}")
+	return b.String()
 }
 
 func NewReply(opts ...func(*Reply)) Reply {
@@ -124,7 +151,7 @@ func (rep *Reply) Write(w io.Writer) error {
 	reply[0] = rep.Ver
 	reply[1] = rep.Rep
 	reply[2] = replyRSV
-	reply[4] = rep.ATyp
+	reply[3] = rep.ATyp
 
 	// Copy BndAddr
 
