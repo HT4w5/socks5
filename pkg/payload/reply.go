@@ -25,6 +25,32 @@ const (
 	AddressTypeNotSupported uint8 = 8
 )
 
+// Get description of REP
+func ReplyReason(rep uint8) string {
+	switch rep {
+	case Succeeded:
+		return "succeeded"
+	case ServerFailure:
+		return "general socks server failure"
+	case NotAllowed:
+		return "connection not allowed by ruleset"
+	case NetworkUnreachable:
+		return "network unreachable"
+	case HostUnreachable:
+		return "host unreachable"
+	case ConnectionRefused:
+		return "connection refused"
+	case TTLExpired:
+		return "ttl expired"
+	case CommandNotSupported:
+		return "command not supported"
+	case AddressTypeNotSupported:
+		return "address type not supported"
+	default:
+		return "unknown rep"
+	}
+}
+
 /*
    +----+-----+-------+------+----------+----------+
    |VER | REP |  RSV  | ATYP | BND.ADDR | BND.PORT |
@@ -62,15 +88,27 @@ func ReplyWithRep(rep uint8) func(*Reply) {
 	}
 }
 
-func ReplyWithATyp(atyp uint8) func(*Reply) {
+func ReplyWithIP(ip netip.Addr) func(*Reply) {
 	return func(r *Reply) {
-		r.ATyp = atyp
+		if ip.Is4() {
+			r.ATyp = IPv4Addr
+		} else {
+			r.ATyp = IPv6Addr
+		}
+		r.BndAddr = ip
 	}
 }
 
-func ReplyWithBndAddr(atyp uint8) func(*Reply) {
+func ReplyWithFQDN(fqdn []byte) func(*Reply) {
 	return func(r *Reply) {
-		r.ATyp = atyp
+		r.BndFQDNLen = uint8(len(fqdn))
+		r.BndFQDN = [255]byte(fqdn)
+	}
+}
+
+func ReplyWithPort(port uint16) func(*Reply) {
+	return func(r *Reply) {
+		r.BndPort = port
 	}
 }
 
