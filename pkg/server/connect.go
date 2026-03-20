@@ -39,10 +39,9 @@ func (s *Server) handleConnect(ctx context.Context, conn net.Conn, request *payl
 	}()
 
 	// Send success reply
-	remoteAddr := conn.RemoteAddr().String()
-	addrPort, err := netip.ParseAddrPort(remoteAddr)
+	addrPort, err := netip.ParseAddrPort(conn.LocalAddr().String())
 	if err != nil {
-		s.logger.Errorf("failed to parse remote address: %v", err)
+		s.logger.Errorf("failed to parse local endpoint address: %v", err)
 		s.sendFailureReply(conn, rep)
 		return
 	}
