@@ -69,14 +69,14 @@ func WithResolver(r resolver.Resolver) func(*Server) {
 // Listen on network and addr
 func (s *Server) ListenAndServe(ctx context.Context, addr netip.AddrPort) error {
 	s.endpoint = addr
-	addtString := addr.String()
+	addrString := addr.String()
 	cfg := net.ListenConfig{}
 
-	lis, err := cfg.Listen(ctx, "tcp", addtString)
+	lis, err := cfg.Listen(ctx, "tcp", addrString)
 	if err != nil {
 		return err
 	}
-	s.logger.Infof("listening on %s", addtString)
+	s.logger.Infof("listening on %s", addrString)
 
 	var wg sync.WaitGroup
 
