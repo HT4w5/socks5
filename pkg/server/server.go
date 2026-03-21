@@ -16,7 +16,9 @@ import (
 )
 
 const (
-	shutdownTimeout = 30 * time.Second
+	shutdownTimeout          = 30 * time.Second
+	defaultUDPByteBufferSize = 1500
+	defaultTCPByteBufferSize = 32 * 1024
 )
 
 type Server struct {
@@ -39,6 +41,10 @@ func New(opts ...func(*Server)) *Server {
 		dialer: dialer.DefaultDialer,
 		res:    &resolver.SystemResolver{},
 		neg:    method.New(),
+
+		// Config
+		udpByteBufferSize: defaultUDPByteBufferSize,
+		tcpByteBufferSize: defaultTCPByteBufferSize,
 	}
 
 	for _, opt := range opts {
@@ -72,6 +78,18 @@ func WithDialer(d dialer.Dialer) func(*Server) {
 func WithResolver(r resolver.Resolver) func(*Server) {
 	return func(s *Server) {
 		s.res = r
+	}
+}
+
+func WithTCPByteBufferSize(size int) func(*Server) {
+	return func(s *Server) {
+		s.tcpByteBufferSize = size
+	}
+}
+
+func WithUDPByteBufferSize(size int) func(*Server) {
+	return func(s *Server) {
+		s.udpByteBufferSize = size
 	}
 }
 

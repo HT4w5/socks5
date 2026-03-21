@@ -61,8 +61,8 @@ func (s *Server) handleConnect(ctx context.Context, conn net.Conn, request *payl
 
 	// Start proxying
 	errCh := make(chan error, 2)
-	go copy(tgtConn, conn, errCh)
-	go copy(conn, tgtConn, errCh)
+	go s.streamCopy(tgtConn, conn, errCh)
+	go s.streamCopy(conn, tgtConn, errCh)
 
 	select {
 	case <-ctx.Done():
