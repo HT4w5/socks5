@@ -8,8 +8,28 @@ import (
 	"github.com/HT4w5/socks5/pkg/payload"
 )
 
-func copy(dst io.Writer, src io.Reader, errCh chan error) {
-	_, err := io.Copy(dst, src)
+func (s *Server) streamCopy(dst io.Writer, src io.Reader, errCh chan error) {
+	// Check manually for zero-copy to avoid unecessarily allocating a buffer
+
+	// If the reader has a WriteTo method, use it to do the copy.
+	// Avoids an allocation and a copy.
+	if wt, ok := src.(io.WriterTo); ok {
+		_, err := wt.WriteTo(dst)
+		errCh <- err
+		return
+	}
+	// Similarly, if the writer has a ReadFrom method, use it to do the copy.
+	if rf, ok := dst.(io.ReaderFrom); ok {
+		_, err := rf.ReadFrom(src)
+		errCh <- err
+		return
+	}
+
+	// Use CopyBuffer with buffer from pool
+	buf := s.tcpBytePool.Get()
+	defer s.tcpBytePool.Put(buf)
+
+	_, err := io.CopyBuffer(dst, src, buf)
 	errCh <- err
 }
 

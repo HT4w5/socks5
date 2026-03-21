@@ -11,6 +11,7 @@ import (
 	"github.com/HT4w5/socks5/pkg/log"
 	"github.com/HT4w5/socks5/pkg/method"
 	"github.com/HT4w5/socks5/pkg/payload"
+	"github.com/HT4w5/socks5/pkg/pool"
 	"github.com/HT4w5/socks5/pkg/resolver"
 )
 
@@ -19,11 +20,16 @@ const (
 )
 
 type Server struct {
-	endpoint netip.AddrPort
-	res      resolver.Resolver
-	dialer   func(ctx context.Context, network string, address string) (net.Conn, error)
-	neg      *method.Negotiator
-	logger   log.Logger
+	udpBytePool *pool.BytePool
+	tcpBytePool *pool.BytePool
+	res         resolver.Resolver
+	dialer      func(ctx context.Context, network string, address string) (net.Conn, error)
+	neg         *method.Negotiator
+	logger      log.Logger
+
+	// Config
+	udpByteBufferSize int
+	tcpByteBufferSize int
 }
 
 // Creates a socks5 server
@@ -38,6 +44,9 @@ func New(opts ...func(*Server)) *Server {
 	for _, opt := range opts {
 		opt(srv)
 	}
+
+	srv.tcpBytePool = pool.New(srv.tcpByteBufferSize)
+	srv.udpBytePool = pool.New(srv.udpByteBufferSize)
 
 	return srv
 }
@@ -68,15 +77,14 @@ func WithResolver(r resolver.Resolver) func(*Server) {
 
 // Listen on network and addr
 func (s *Server) ListenAndServe(ctx context.Context, addr netip.AddrPort) error {
-	s.endpoint = addr
-	addrString := addr.String()
+	addtString := addr.String()
 	cfg := net.ListenConfig{}
 
-	lis, err := cfg.Listen(ctx, "tcp", addrString)
+	lis, err := cfg.Listen(ctx, "tcp", addtString)
 	if err != nil {
 		return err
 	}
-	s.logger.Infof("listening on %s", addrString)
+	s.logger.Infof("listening on %s", addtString)
 
 	var wg sync.WaitGroup
 
