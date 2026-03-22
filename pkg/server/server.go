@@ -16,7 +16,7 @@ import (
 )
 
 const (
-	shutdownTimeout          = 30 * time.Second
+	shutdownTimeout          = 5 * time.Second
 	defaultUDPByteBufferSize = 1500 - 20 - 8
 	defaultTCPByteBufferSize = 32 * 1024
 )
@@ -150,13 +150,12 @@ func (s *Server) ListenAndServe(ctx context.Context, addr netip.AddrPort) error 
 	defer cancelConn()
 
 	// Closer
-	go func() {
-		<-ctx.Done()
+	context.AfterFunc(ctx, func() {
 		if err := lis.Close(); err != nil {
 			s.logger.Errorf("failed to close listener: %v", err)
 		}
 		time.AfterFunc(shutdownTimeout, cancelConn)
-	}()
+	})
 
 	for {
 		conn, err := lis.Accept()
