@@ -201,7 +201,8 @@ func (s *Server) udpRelayOutbound(ready chan<- struct{}, clientEndpoint *netip.A
 		}
 
 		// Resolve fqdn
-		ctx, _ := context.WithTimeout(context.Background(), udpResolveTimeout)
+		ctx, cancel := context.WithTimeout(context.Background(), udpResolveTimeout)
+		defer cancel()
 		if udpRequest.ATyp == payload.FQDNAddr {
 			udpRequest.DstAddr, err = s.res.Resolve(ctx, string(udpRequest.DstFQDN))
 			if err != nil {
