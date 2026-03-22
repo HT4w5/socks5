@@ -40,7 +40,7 @@ func (s *Server) handleUDPAssociate(ctx context.Context, conn net.Conn, request 
 
 	defer func() {
 		if err := inPc.Close(); err != nil {
-			if err != net.ErrClosed {
+			if !errors.Is(err, net.ErrClosed) {
 				s.logger.Warnf("failed to close inbound udp packet connection: %v", err)
 			}
 		}
@@ -61,7 +61,7 @@ func (s *Server) handleUDPAssociate(ctx context.Context, conn net.Conn, request 
 
 	defer func() {
 		if err := outPc.Close(); err != nil {
-			if err != net.ErrClosed {
+			if !errors.Is(err, net.ErrClosed) {
 				s.logger.Warnf("failed to close outbound udp packet connection: %v", err)
 			}
 		}
@@ -90,15 +90,15 @@ func (s *Server) handleUDPAssociate(ctx context.Context, conn net.Conn, request 
 	ctx = contextFromConn(ctx, conn)
 
 	// Closer
-	go func() {
-		<-ctx.Done()
+	stop := context.AfterFunc(ctx, func() {
 		if err := inPc.Close(); err != nil {
 			s.logger.Warnf("failed to close inbound udp packet connection")
 		}
 		if err := outPc.Close(); err != nil {
 			s.logger.Warnf("failed to close outbound udp packet connection")
 		}
-	}()
+	})
+	defer stop()
 
 	// Set up endpoint filter
 	var filter func(netip.AddrPort) bool
@@ -140,74 +140,29 @@ func (s *Server) handleUDPAssociate(ctx context.Context, conn net.Conn, request 
 		}
 	}
 
-	var clientUDPEndpoint netip.AddrPort
-	if request.ATyp == payload.FQDNAddr || request.DstAddr.IsUnspecified() || request.DstPort == 0 {
-		// Manually handle the first packet to determine client endpoint
-		buf := s.udpBytePool.Get()
-		for {
-			var n int
-			var err error
-			n, clientUDPEndpoint, err = inPc.ReadFromUDPAddrPort(buf)
-			if err != nil {
-				s.logger.Warnf("failed to read from UDP packet connection: %v", err)
-				continue
-			}
-
-			var udpRequest payload.UDPRequest
-			err = udpRequest.Parse(handler.UntransformDatagram(buf[:n]))
-			if err != nil {
-				s.logger.Warnf("failed to parse udp request: %v", err)
-				continue
-			}
-
-			s.logger.Debugf("received udp request: %s", udpRequest.String())
-
-			if udpRequest.Frag != payload.NoFrag {
-				// TODO: implement fragmentation
-				continue
-			}
-
-			// Resolve fqdn
-			ctx, _ := context.WithTimeout(ctx, udpResolveTimeout)
-			if udpRequest.ATyp == payload.FQDNAddr {
-				udpRequest.DstAddr, err = s.res.Resolve(ctx, string(udpRequest.DstFQDN))
-				if err != nil {
-					s.logger.Warnf("failed to resolve dst fqdn: %v", err)
-					continue
-				}
-			}
-
-			dstAddrPort := netip.AddrPortFrom(udpRequest.DstAddr, udpRequest.DstPort)
-			// Append to endpoint filter set
-			append(dstAddrPort)
-
-			// Send to outbound
-			if _, err := outPc.WriteToUDPAddrPort(udpRequest.Data, dstAddrPort); err != nil {
-				s.logger.Warnf("failed to send udp packet: %v", err)
-			}
-
-			break
-		}
-		s.udpBytePool.Put(buf)
-	} else {
-		clientUDPEndpoint = netip.AddrPortFrom(request.DstAddr, request.DstPort)
+	var clientEndpoint netip.AddrPort
+	ready := make(chan struct{})
+	if !(request.ATyp == payload.FQDNAddr || request.DstAddr.IsUnspecified() || request.DstPort == 0) {
+		clientEndpoint = netip.AddrPortFrom(request.DstAddr, request.DstPort)
+		close(ready)
 	}
 
 	var wg sync.WaitGroup
 	wg.Go(func() {
-		s.udpRelayInbound(filter, clientUDPEndpoint, handler, outPc, inPc)
+		s.udpRelayInbound(ctx, ready, &clientEndpoint, filter, handler, outPc, inPc)
 	})
 	wg.Go(func() {
-		s.udpRelayOutbound(append, clientUDPEndpoint, handler, outPc, inPc)
+		s.udpRelayOutbound(ready, &clientEndpoint, append, handler, outPc, inPc)
 	})
 	wg.Wait()
 }
 
 // Send packets from the socks client to outbound
-func (s *Server) udpRelayOutbound(append func(netip.AddrPort), clientUDPEndpoint netip.AddrPort, handler method.MethodHandler, outPc *net.UDPConn, inPc *net.UDPConn) {
+func (s *Server) udpRelayOutbound(ready chan<- struct{}, clientEndpoint *netip.AddrPort, append func(netip.AddrPort), handler method.MethodHandler, outPc *net.UDPConn, inPc *net.UDPConn) {
 	buf := s.udpBytePool.Get()
 	defer s.udpBytePool.Put(buf)
 
+	var once sync.Once
 	for {
 		n, udpEndpoint, err := inPc.ReadFromUDPAddrPort(buf)
 		if err != nil {
@@ -217,7 +172,16 @@ func (s *Server) udpRelayOutbound(append func(netip.AddrPort), clientUDPEndpoint
 			s.logger.Warnf("failed to read from UDP packet connection: %v", err)
 			continue
 		}
-		if udpEndpoint != clientUDPEndpoint {
+
+		once.Do(func() {
+			if clientEndpoint.IsValid() {
+				return
+			}
+			*clientEndpoint = udpEndpoint
+			close(ready)
+		})
+
+		if udpEndpoint != *clientEndpoint {
 			// Drop packet from invalid sender
 			continue
 		}
@@ -262,7 +226,14 @@ const (
 )
 
 // Send incoming packets from outbound to the client
-func (s *Server) udpRelayInbound(filter func(netip.AddrPort) bool, clientUDPEndpoint netip.AddrPort, handler method.MethodHandler, outPc *net.UDPConn, inPc *net.UDPConn) {
+func (s *Server) udpRelayInbound(ctx context.Context, ready <-chan struct{}, clientEndpoint *netip.AddrPort, filter func(netip.AddrPort) bool, handler method.MethodHandler, outPc *net.UDPConn, inPc *net.UDPConn) {
+	// Wait until the outbound relay has captured clientEndpoint
+	select {
+	case <-ready:
+	case <-ctx.Done():
+		return
+	}
+
 	buf := s.udpBytePool.Get()
 	defer s.udpBytePool.Put(buf)
 
@@ -307,7 +278,7 @@ func (s *Server) udpRelayInbound(filter func(netip.AddrPort) bool, clientUDPEndp
 			continue
 		}
 
-		if _, err := inPc.WriteToUDPAddrPort(handler.TransformDatagram(buf[offset:udpHeaderOffset+n]), clientUDPEndpoint); err != nil {
+		if _, err := inPc.WriteToUDPAddrPort(handler.TransformDatagram(buf[offset:udpHeaderOffset+n]), *clientEndpoint); err != nil {
 			s.logger.Warnf("failed to send udp packet: %v", err)
 		}
 	}
