@@ -14,6 +14,16 @@ import (
 // Handles the CONNECT command
 // Note that conn closure is handled by the caller
 func (s *Server) handleConnect(ctx context.Context, conn net.Conn, request *payload.Request) {
+	// Resolve FQDN
+	if request.ATyp == payload.FQDNAddr {
+		if addr, err := s.res.Resolve(ctx, string(request.DstFQDN[:])); err != nil {
+			s.logger.Warnf("failed to resolve dst fqdn: %v; aborting", err)
+			s.sendFailureReply(conn, payload.HostUnreachable)
+		} else {
+			request.DstAddr = addr
+		}
+	}
+
 	rep := payload.ServerFailure
 	tgtConn, err := s.dialer(ctx, "tcp", net.JoinHostPort(request.DstAddr.String(), strconv.Itoa(int(request.DstPort))))
 	if err != nil {
@@ -34,7 +44,7 @@ func (s *Server) handleConnect(ctx context.Context, conn net.Conn, request *payl
 	defer func() {
 		err := tgtConn.Close()
 		if err != nil {
-			s.logger.Errorf("failed to close target connection: %v", err)
+			s.logger.Warnf("failed to close target connection: %v", err)
 		}
 	}()
 

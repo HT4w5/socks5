@@ -93,9 +93,13 @@ func (neg *Negotiator) HandleNegotiation(conn net.Conn) (MethodHandler, error) {
 }
 
 // A method handler handles method-dependent
-// sub-negotiations and provides encapsulated
-// reader and writer
+// sub-negotiations
+//
+// Privides encapsulated net.Conn and method
+// for transforming datagrams on departure
 type MethodHandler interface {
-	Wrap(conn net.Conn) net.Conn
+	WrapConn(conn net.Conn) net.Conn
+	TransformDatagram(data []byte) []byte
+	UntransformDatagram(data []byte) []byte
 	GetCode() uint8
 }

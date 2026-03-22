@@ -2,7 +2,14 @@ package payload
 
 import (
 	"encoding/binary"
+	"fmt"
 	"net/netip"
+	"strings"
+)
+
+// FRAG
+const (
+	NoFrag uint8 = 0
 )
 
 /*
@@ -20,6 +27,33 @@ type UDPRequest struct {
 	DstFQDN []byte
 	DstPort uint16
 	Data    []byte
+}
+
+func (u *UDPRequest) String() string {
+	var b strings.Builder
+	b.WriteString("{")
+
+	// Fragmentation
+	if u.Frag == 0 {
+		b.WriteString("Frag: NONE, ")
+	} else {
+		fmt.Fprintf(&b, "Frag: %d, ", u.Frag)
+	}
+
+	// DstAddr
+	b.WriteString("Dst: ")
+	switch u.ATyp {
+	case IPv4Addr, IPv6Addr:
+		fmt.Fprintf(&b, "%s:%d", u.DstAddr.String(), u.DstPort)
+	case FQDNAddr:
+		domain := string(u.DstFQDN)
+		fmt.Fprintf(&b, "%s:%d", domain, u.DstPort)
+	default:
+		fmt.Fprintf(&b, "INVALID_ATYP(%d)", u.ATyp)
+	}
+
+	b.WriteString("}")
+	return b.String()
 }
 
 // Parse extracts header from datagram
@@ -64,7 +98,7 @@ func (r *UDPRequest) Parse(datagram []byte) error {
 // for the caller to write the data to
 //
 // Caller is responsible for handling the lifecycle of the buffer slice
-func (r *UDPRequest) Write(buffer []byte) ([]byte, error) {
+func (r *UDPRequest) Write(buffer []byte) error {
 	headerLen := 6
 	switch r.ATyp {
 	case IPv4Addr:
@@ -74,11 +108,11 @@ func (r *UDPRequest) Write(buffer []byte) ([]byte, error) {
 	case FQDNAddr:
 		headerLen += 1 + len(r.DstFQDN)
 	default:
-		return nil, ErrUnsupportedAddressType
+		return ErrUnsupportedAddressType
 	}
 
 	if len(buffer) < headerLen {
-		return nil, ErrTooShort
+		return ErrTooShort
 	}
 
 	// RSV
@@ -102,5 +136,5 @@ func (r *UDPRequest) Write(buffer []byte) ([]byte, error) {
 	}
 
 	binary.BigEndian.PutUint16(buffer[headerLen-2:headerLen], r.DstPort)
-	return buffer[headerLen:], nil
+	return nil
 }

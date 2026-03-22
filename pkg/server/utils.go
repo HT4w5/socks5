@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"io"
 	"net"
 	"net/netip"
@@ -44,4 +45,16 @@ func (s *Server) sendFailureReply(conn net.Conn, rep uint8) {
 	if err := r.Write(conn); err != nil {
 		s.logger.Errorf("failed to write reply: %v", err)
 	}
+}
+
+// Drain connection and cancel context on closure
+func contextFromConn(parent context.Context, conn net.Conn) context.Context {
+	ctx, cancel := context.WithCancel(parent)
+
+	go func() {
+		defer cancel()
+		io.Copy(io.Discard, conn)
+	}()
+
+	return ctx
 }

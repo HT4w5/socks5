@@ -7,19 +7,19 @@ type BytePool struct {
 	pool sync.Pool
 }
 
-func New(size int) *BytePool {
+func NewBytePool(size int) *BytePool {
 	return &BytePool{
 		size: size,
 		pool: sync.Pool{
 			New: func() any {
-				return make([]byte, 0, size)
+				return make([]byte, size)
 			},
 		},
 	}
 }
 
 func (p *BytePool) Get() []byte {
-	return p.pool.Get().([]byte)
+	return p.pool.Get().([]byte)[:p.size]
 }
 
 func (p *BytePool) Put(b []byte) {
@@ -27,5 +27,5 @@ func (p *BytePool) Put(b []byte) {
 	if cap(b) != p.size {
 		return
 	}
-	p.pool.Put(b[:0])
+	p.pool.Put(b)
 }

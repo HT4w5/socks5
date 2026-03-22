@@ -17,21 +17,34 @@ import (
 
 const (
 	shutdownTimeout          = 30 * time.Second
-	defaultUDPByteBufferSize = 1500
+	defaultUDPByteBufferSize = 1500 - 20 - 8
 	defaultTCPByteBufferSize = 32 * 1024
 )
 
+type UDPNATBehavior int
+
+const (
+	EndpointIndependent UDPNATBehavior = iota
+	AddressDependent
+	AddressAndPortDependent
+)
+
 type Server struct {
-	udpBytePool *pool.BytePool
-	tcpBytePool *pool.BytePool
-	res         resolver.Resolver
-	dialer      func(ctx context.Context, network string, address string) (net.Conn, error)
-	neg         *method.Negotiator
-	logger      log.Logger
+	udpBytePool        *pool.BytePool
+	udpAddrSetPool     *pool.MapPool[netip.Addr, struct{}]
+	udpAddrPortSetPool *pool.MapPool[netip.AddrPort, struct{}]
+	tcpBytePool        *pool.BytePool
+	res                resolver.Resolver
+	dialer             func(ctx context.Context, network string, address string) (net.Conn, error)
+	neg                *method.Negotiator
+	logger             log.Logger
 
 	// Config
-	udpByteBufferSize int
-	tcpByteBufferSize int
+	udpByteBufferSize  int
+	tcpByteBufferSize  int
+	tcpKeepAliveConfig net.KeepAliveConfig
+	udpNATBehavior     UDPNATBehavior
+	udpNATMapSize      int
 }
 
 // Creates a socks5 server
@@ -45,14 +58,27 @@ func New(opts ...func(*Server)) *Server {
 		// Config
 		udpByteBufferSize: defaultUDPByteBufferSize,
 		tcpByteBufferSize: defaultTCPByteBufferSize,
+		tcpKeepAliveConfig: net.KeepAliveConfig{
+			Enable: true,
+		},
+		udpNATBehavior: AddressAndPortDependent,
+		udpNATMapSize:  128,
 	}
 
 	for _, opt := range opts {
 		opt(srv)
 	}
 
-	srv.tcpBytePool = pool.New(srv.tcpByteBufferSize)
-	srv.udpBytePool = pool.New(srv.udpByteBufferSize)
+	srv.tcpBytePool = pool.NewBytePool(srv.tcpByteBufferSize)
+	srv.udpBytePool = pool.NewBytePool(srv.udpByteBufferSize)
+
+	switch srv.udpNATBehavior {
+	case EndpointIndependent:
+	case AddressDependent:
+		srv.udpAddrSetPool = pool.NewMapPool[netip.Addr, struct{}](srv.udpNATMapSize)
+	case AddressAndPortDependent:
+		srv.udpAddrPortSetPool = pool.NewMapPool[netip.AddrPort, struct{}](srv.udpNATMapSize)
+	}
 
 	return srv
 }
@@ -93,10 +119,24 @@ func WithUDPByteBufferSize(size int) func(*Server) {
 	}
 }
 
+func WithTCPKeepAliveConfig(c net.KeepAliveConfig) func(*Server) {
+	return func(s *Server) {
+		s.tcpKeepAliveConfig = c
+	}
+}
+
+func WithUDPNATBehavior(b UDPNATBehavior) func(*Server) {
+	return func(s *Server) {
+		s.udpNATBehavior = b
+	}
+}
+
 // Listen on network and addr
 func (s *Server) ListenAndServe(ctx context.Context, addr netip.AddrPort) error {
 	addtString := addr.String()
-	cfg := net.ListenConfig{}
+	cfg := net.ListenConfig{
+		KeepAliveConfig: s.tcpKeepAliveConfig,
+	}
 
 	lis, err := cfg.Listen(ctx, "tcp", addtString)
 	if err != nil {
@@ -145,7 +185,7 @@ func (s *Server) handleConn(ctx context.Context, conn net.Conn) {
 	defer func() {
 		err := conn.Close()
 		if err != nil {
-			s.logger.Errorf("failed to close connection: %v", err)
+			s.logger.Warnf("failed to close connection: %v", err)
 		}
 	}()
 
@@ -156,7 +196,7 @@ func (s *Server) handleConn(ctx context.Context, conn net.Conn) {
 	}
 
 	// Wrap connection in method handler
-	conn = handler.Wrap(conn)
+	conn = handler.WrapConn(conn)
 
 	// From now on, a reply is guaranteed
 	// `goto Failure` triggers non-success reply
@@ -180,9 +220,8 @@ func (s *Server) handleConn(ctx context.Context, conn net.Conn) {
 	// Check command (for support, not allowance)
 	switch request.Cmd {
 	case payload.Connect:
+	case payload.UDPAssociate:
 	case payload.Bind: // TODO: implement Bind
-		fallthrough
-	case payload.UDPAssociate: // TODO: implement UDPAssociate
 		fallthrough
 	default:
 		rep = payload.CommandNotSupported
@@ -203,25 +242,14 @@ func (s *Server) handleConn(ctx context.Context, conn net.Conn) {
 
 	// TODO: implement ruleset
 
-	// Resolve FQDN
-	if request.ATyp == payload.FQDNAddr {
-		if addr, err := s.res.Resolve(ctx, string(request.DstFQDN[:])); err != nil {
-			s.logger.Warnf("failed to resolve dst fqdn: %v; aborting", err)
-			rep = payload.HostUnreachable
-			goto Failure
-		} else {
-			request.DstAddr = addr
-		}
-	}
-
 	// Select command
 	// Upsteam connection test is handled by specific command handler
 	switch request.Cmd {
 	case payload.Connect:
 		s.handleConnect(ctx, conn, &request)
+	case payload.UDPAssociate:
+		s.handleUDPAssociate(ctx, conn, &request, handler)
 	case payload.Bind: // TODO: implement Bind
-		fallthrough
-	case payload.UDPAssociate: // TODO: implement UDPAssociate
 		fallthrough
 	default:
 		// Should never reach this point if nothing is wrong
