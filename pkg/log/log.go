@@ -2,7 +2,10 @@ package log
 
 import (
 	"fmt"
+	"io"
 	"os"
+	"sync"
+	"time"
 )
 
 // Logger used by socks5 server
@@ -30,47 +33,120 @@ const (
 	Debug
 )
 
-type StdoutLogger struct {
-	level Level
+const (
+	reset = "\x1b[0m"
+	bold  = "\x1b[1m"
+
+	colorError = "\x1b[31m"
+	colorWarn  = "\x1b[33m"
+	colorInfo  = "\x1b[32m"
+	colorDebug = "\x1b[35m"
+
+	pfxError = "[ERROR]"
+	pfxWarn  = "[WARN] "
+	pfxInfo  = "[INFO] "
+	pfxDebug = "[DEBUG]"
+)
+
+type AsyncLogger struct {
+	level      Level
+	w          io.Writer
+	logChan    chan string
+	done       chan struct{}
+	wg         sync.WaitGroup
+	bufferSize int
+
+	// Prefixes
+	pfxError string
+	pfxWarn  string
+	pfxInfo  string
+	pfxDebug string
 }
 
-func (s *StdoutLogger) Errorf(format string, a ...any) {
-	if s.level >= Error {
-		fmt.Fprintf(os.Stdout, "[ERROR] "+format+"\n", a...)
+func NewAsyncLogger(opts ...func(*AsyncLogger)) *AsyncLogger {
+	l := &AsyncLogger{
+		level:      Info,
+		w:          os.Stdout,
+		bufferSize: 64, // Default buffer size
 	}
-}
 
-func (s *StdoutLogger) Warnf(format string, a ...any) {
-	if s.level >= Warn {
-		fmt.Fprintf(os.Stdout, "[WARN] "+format+"\n", a...)
-	}
-}
-
-func (s *StdoutLogger) Infof(format string, a ...any) {
-	if s.level >= Info {
-		fmt.Fprintf(os.Stdout, "[INFO] "+format+"\n", a...)
-	}
-}
-
-func (s *StdoutLogger) Debugf(format string, a ...any) {
-	if s.level >= Debug {
-		fmt.Fprintf(os.Stdout, "[DEBUG] "+format+"\n", a...)
-	}
-}
-
-func NewStdoutLogger(opts ...func(*StdoutLogger)) *StdoutLogger {
-	l := &StdoutLogger{
-		level: Info, // Default to info level
-	}
 	for _, opt := range opts {
 		opt(l)
 	}
+
+	l.logChan = make(chan string, l.bufferSize)
+
+	if l.w == os.Stdout {
+		l.pfxError = bold + colorError + pfxError + reset
+		l.pfxWarn = bold + colorWarn + pfxWarn + reset
+		l.pfxInfo = bold + colorInfo + pfxInfo + reset
+		l.pfxDebug = bold + colorDebug + pfxDebug + reset
+	} else {
+		l.pfxError, l.pfxWarn, l.pfxInfo, l.pfxDebug = pfxError, pfxWarn, pfxInfo, pfxDebug
+	}
+
+	l.wg.Go(l.run)
+
 	return l
 }
 
-// WithLevel sets the log level for StdoutLogger
-func WithLevel(level Level) func(*StdoutLogger) {
-	return func(l *StdoutLogger) {
-		l.level = level
+// I/O worker
+func (l *AsyncLogger) run() {
+	for msg := range l.logChan {
+		fmt.Fprint(l.w, msg)
 	}
+}
+
+// Close stops the logger and waits for all queued logs to be written
+func (l *AsyncLogger) Close() {
+	close(l.logChan)
+	l.wg.Wait()
+}
+
+func (l *AsyncLogger) log(prefix string, format string, a ...any) {
+	msg := fmt.Sprintf("%s %s %s\n", prefix, time.Now().Format(time.RFC3339), fmt.Sprintf(format, a...))
+
+	select {
+	case l.logChan <- msg:
+	default:
+		// Buffer overflow
+	}
+}
+
+func (l *AsyncLogger) Errorf(format string, a ...any) {
+	if l.level >= Error {
+		l.log(l.pfxError, format, a...)
+	}
+}
+
+func (l *AsyncLogger) Warnf(format string, a ...any) {
+	if l.level >= Warn {
+		l.log(l.pfxWarn, format, a...)
+	}
+}
+
+func (l *AsyncLogger) Infof(format string, a ...any) {
+	if l.level >= Info {
+		l.log(l.pfxInfo, format, a...)
+	}
+}
+
+func (l *AsyncLogger) Debugf(format string, a ...any) {
+	if l.level >= Debug {
+		l.log(l.pfxDebug, format, a...)
+	}
+}
+
+// Options
+
+func WithLevel(level Level) func(*AsyncLogger) {
+	return func(l *AsyncLogger) { l.level = level }
+}
+
+func WithWriter(w io.Writer) func(*AsyncLogger) {
+	return func(l *AsyncLogger) { l.w = w }
+}
+
+func WithBufferSize(size int) func(*AsyncLogger) {
+	return func(l *AsyncLogger) { l.bufferSize = size }
 }
